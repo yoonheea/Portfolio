@@ -26,6 +26,7 @@ import SidebarStatus from './components/SidebarStatus';
 import ConsultingChat from './components/ConsultingChat';
 import PortfolioViewer from './components/PortfolioViewer';
 import SloganSelector from './components/SloganSelector';
+import { validateGeminiKey } from './utils/geminiClient';
 
 export default function App() {
   const [viewMode, setViewMode] = useState<'landing' | 'builder'>('landing');
@@ -40,27 +41,24 @@ export default function App() {
   useEffect(() => {
     const stored = localStorage.getItem('gemini_api_key');
     if (stored) {
-      fetch('/api/validate-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: stored.trim() })
-      })
-      .then(res => {
-        if (res.ok) {
+      validateGeminiKey(stored)
+        .then((isValid) => {
+          if (isValid) {
+            setIsValidated(true);
+            setApiKey(stored.trim());
+            setTempApiKey(stored.trim());
+          } else {
+            setIsValidated(false);
+            setApiKey('');
+            localStorage.removeItem('gemini_api_key');
+          }
+        })
+        .catch(() => {
+          // Fallback to true if network error happens on startup to prevent blocking offline users
           setIsValidated(true);
           setApiKey(stored.trim());
           setTempApiKey(stored.trim());
-        } else {
-          setIsValidated(false);
-          setApiKey('');
-          localStorage.removeItem('gemini_api_key');
-          setValidationError("이전에 저장된 API Key가 만료되었거나 올바르지 않습니다. 다시 입력해 주십시오.");
-        }
-      })
-      .catch(() => {
-        // Fallback to true if network error happens on startup to prevent blocking offline/sandbox users
-        setIsValidated(true);
-      });
+        });
     }
   }, []);
 
@@ -76,16 +74,9 @@ export default function App() {
     setValidationError(null);
 
     try {
-      const response = await fetch('/api/validate-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: trimmed })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "유효하지 않은 API Key입니다.");
+      const isValid = await validateGeminiKey(trimmed);
+      if (!isValid) {
+        throw new Error("유효하지 않은 API Key입니다.");
       }
 
       setApiKey(trimmed);

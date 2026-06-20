@@ -13,6 +13,13 @@ import {
   Plus
 } from 'lucide-react';
 import { CareerPortfolio, CaseStudy, ChatMessage, QuestionId, ExtractionResult } from '../types';
+import {
+  recommendFramework,
+  generateNarrativeCase,
+  generateSwot,
+  generatePortfolioSlogans,
+  analyzeFileContent
+} from '../utils/geminiClient';
 
 interface ConsultingChatProps {
   portfolio: CareerPortfolio;
@@ -140,20 +147,7 @@ export default function ConsultingChat({
     addBotMessage(`📁 [파일 전송] '${fileName}' 문서를 검토하여 직업상담 전문성 단서를 신속하게 분석하고 있습니다. 잠시만 기다려 주세요...`);
 
     try {
-      const response = await fetch('/api/analyze-file', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-gemini-key': apiKey || ''
-        },
-        body: JSON.stringify({ fileName, textContent: text })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || "분석 오류 발생");
-      }
-      const result: ExtractionResult = await response.json();
+      const result: ExtractionResult = await analyzeFileContent(fileName, text, apiKey);
 
       setIsAnalyzing(false);
       setExtractedData(result);
@@ -240,37 +234,13 @@ export default function ConsultingChat({
 
     try {
       // 1. Ask for framework recommendation
-      const recRes = await fetch('/api/recommend-framework', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-gemini-key': apiKey || ''
-        },
-        body: JSON.stringify({ caseData: caseStudy })
-      });
-      if (!recRes.ok) {
-        const errorData = await recRes.json().catch(() => ({}));
-        throw new Error(errorData.error || "프레임워크 추천 처리 실패");
-      }
-      const rec = await recRes.json();
-      const chosenFramework = rec.recommended || 'STAR';
+      const rec = await recommendFramework(caseStudy, apiKey);
+      const chosenFramework = (rec.recommended === 'GROW' ? 'GROW' : 'STAR') as 'STAR' | 'GROW';
 
       addBotMessage(`💡 **[프레임워크 추천 피드백]**\n${rec.reason}\n\n추천된 **"${chosenFramework}"** 기법을 적용하여 공식 비즈니스 서술체 원고를 실시간 집필합니다.`);
 
       // 2. Generate full STAR or GROW narrative
-      const narrationRes = await fetch('/api/generate-narrative-case', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-gemini-key': apiKey || ''
-        },
-        body: JSON.stringify({ caseData: caseStudy, framework: chosenFramework })
-      });
-      if (!narrationRes.ok) {
-        const errorData = await narrationRes.json().catch(() => ({}));
-        throw new Error(errorData.error || "대표 사례 원고 생성 실패");
-      }
-      const narrativeData = await narrationRes.json();
+      const narrativeData = await generateNarrativeCase(caseStudy, chosenFramework, apiKey);
 
       onUpdatePortfolio(prev => {
         const updated = prev.cases.map(c => {
@@ -525,23 +495,16 @@ export default function ConsultingChat({
         
         // Call API 4 SWOT consolidation
         addBotMessage("📊 주신 개 실화 근거들을 매칭하여 전문가 등급의 SWOT 최종 보고 성조 문장으로 정제하고 있습니다. 잠시만 기다려 주세요...");
-        try {
-          const swRes = await fetch('/api/generate-swot', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'x-gemini-key': apiKey || ''
-            },
-            body: JSON.stringify({ swotAnswers: { ...portfolio.swot, threat: answer }, name: portfolio.name, activeFields: portfolio.activeFields })
+        generateSwot({ ...portfolio.swot, threat: answer }, portfolio.name, portfolio.activeFields, apiKey)
+          .then((swCombined) => {
+            onUpdatePortfolio(prev => ({
+              ...prev,
+              swot: swCombined
+            }));
+          })
+          .catch((e) => {
+            console.warn("SWOT generation failed:", e);
           });
-          const swCombined = await swRes.json();
-          onUpdatePortfolio(prev => ({
-            ...prev,
-            swot: swCombined
-          }));
-        } catch (e) {
-          console.warn(e);
-        }
 
         onChangeQId('Q16');
         break;
@@ -561,26 +524,15 @@ export default function ConsultingChat({
         
         // Finalize everything
         // Call slogan API optionally to preload slogans for selection
-        try {
-          const sRes = await fetch('/api/generate-portfolio-slogans', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'x-gemini-key': apiKey || ''
-            },
-            body: JSON.stringify({
-              totalExperience: portfolio.totalExperience,
-              activeFields: portfolio.activeFields,
-              companyName: portfolio.companyName
-            })
+        generatePortfolioSlogans(portfolio.totalExperience, portfolio.activeFields, portfolio.companyName, apiKey)
+          .then((slogansObj) => {
+            if (slogansObj.slogans && slogansObj.slogans.length > 0) {
+              onUpdatePortfolio(prev => ({ ...prev, slogan: slogansObj.slogans[0] }));
+            }
+          })
+          .catch((e) => {
+            console.warn("Slogans generation failed:", e);
           });
-          const slogansObj = await sRes.json();
-          if (slogansObj.slogans && slogansObj.slogans.length > 0) {
-            onUpdatePortfolio(prev => ({ ...prev, slogan: slogansObj.slogans[0] }));
-          }
-        } catch(e) {
-          console.warn(e);
-        }
         
         onChangeQId('COMPLETE');
         break;
